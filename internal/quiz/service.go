@@ -197,13 +197,13 @@ func (s *Service) runGeneration(ctx context.Context, req *QuizRequest) (Quiz, er
 	// The validation function ai.ValidateResponse already exists and is unit
 	// tested in internal/ai/client.go. Wire it in now:
 	//
-	//    if err := ai.ValidateResponse(aiResponse); err != nil {
-	//        slog.Error("validation failed",
-	//            "request_id", req.ID,
-	//            "error", err,
-	//        )
-	//        return Quiz{}, fmt.Errorf("validate AI response: %w", err)
-	//    }
+	if err := ai.ValidateResponse(aiResponse); err != nil {
+		slog.Error("validation failed",
+			"request_id", req.ID,
+			"error", err,
+		)
+		return Quiz{}, fmt.Errorf("validate AI response: %w", err)
+	}
 	//
 	// If validation is skipped, bad AI output would be trusted and saved.
 	// "AI generates. Backend governs." — never save an unvalidated response.
@@ -259,7 +259,10 @@ func toQuestions(resp ai.GenerateQuizResponse) []Question {
 // The stub already derives difficulty from mastery, so the base version above
 // works for the whole workshop.
 func (s *Service) buildAIRequest(ctx context.Context, lesson Lesson, mastery Mastery) (ai.GenerateQuizRequest, error) {
-	return ai.GenerateQuizRequest{}, fmt.Errorf("TODO 3: implement buildAIRequest in internal/quiz/service.go")
+	return ai.GenerateQuizRequest{
+		Objective: lesson.Objective,
+		Mastery:   mastery.Score,
+	}, nil
 }
 
 // GetQuizRequest returns the current status of a generation job.

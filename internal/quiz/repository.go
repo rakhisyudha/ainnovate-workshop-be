@@ -75,7 +75,21 @@ func NewRepository(pool *pgxpool.Pool) *PostgresRepository {
 // Always use $1 (parameterized query). Never build SQL with string
 // concatenation — user input must never be pasted into SQL.
 func (r *PostgresRepository) GetLesson(ctx context.Context, id uuid.UUID) (Lesson, error) {
-	return Lesson{}, fmt.Errorf("TODO 1: implement GetLesson in internal/quiz/repository.go")
+	var lesson Lesson
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, title, objective, created_at
+		FROM lessons
+		WHERE id = $1`, id,
+	).Scan(&lesson.ID, &lesson.Title, &lesson.Objective, &lesson.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Lesson{}, ErrLessonNotFound
+	}
+	if err != nil {
+		return Lesson{}, fmt.Errorf("query lesson: %w", err)
+	}
+
+	return lesson, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +109,21 @@ func (r *PostgresRepository) GetLesson(ctx context.Context, id uuid.UUID) (Lesso
 //  3. If the result is pgx.ErrNoRows, return ErrMasteryNotFound.
 //  4. Return the mastery.
 func (r *PostgresRepository) GetMastery(ctx context.Context, userID uuid.UUID, lessonID uuid.UUID) (Mastery, error) {
-	return Mastery{}, fmt.Errorf("TODO 2: implement GetMastery in internal/quiz/repository.go")
+	var mastery Mastery
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT user_id, lesson_id, score
+		FROM masteries
+		WHERE user_id = $1 AND lesson_id = $2`, userID, lessonID,
+	).Scan(&mastery.UserID, &mastery.LessonID, &mastery.Score)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Mastery{}, ErrMasteryNotFound
+	}
+	if err != nil {
+		return Mastery{}, fmt.Errorf("query mastery: %w", err)
+	}
+
+	return mastery, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +167,57 @@ func (r *PostgresRepository) GetMastery(ctx context.Context, userID uuid.UUID, l
 //   - close the batch results (results.Close()) before committing
 //   - always wrap low-level errors with %w
 func (r *PostgresRepository) CreateQuiz(ctx context.Context, params CreateQuizParams) (Quiz, error) {
-	return Quiz{}, fmt.Errorf("TODO 5 + 6: implement CreateQuiz in internal/quiz/repository.go")
+	if len(params.Questions) == 0 {
+		return Quiz{}, errors.New("cannot create a quiz without questions")
+	}
+
+	// 1. Open a transaction.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Quiz{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // safe no-op if Commit already succeeded
+
+	// 2. Insert the quiz.
+	var created Quiz
+	err = tx.QueryRow(ctx, `
+		INSERT INTO quizzes (id, user_id, lesson_id, difficulty)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, user_id, lesson_id, difficulty, created_at`,
+		uuid.New(), params.UserID, params.LessonID, params.Difficulty,
+	).Scan(&created.ID, &created.UserID, &created.LessonID, &created.Difficulty, &created.CreatedAt)
+	if err != nil {
+		return Quiz{}, fmt.Errorf("insert quiz: %w", err)
+	}
+
+	// 3. Queue every question into one pgx.Batch (single round-trip).
+	batch := &pgx.Batch{}
+
+	for _, question := range params.Questions {
+		optionsJSON, err := json.Marshal(question.Options)
+		if err != nil {
+			return Quiz{}, fmt.Errorf("encode question options: %w", err)
+		}
+
+		batch.Queue(`
+			INSERT INTO questions (id, quiz_id, question, options, correct_option, position)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			question.ID, created.ID, question.Text, optionsJSON, question.CorrectOption, question.Position,
+		)
+	}
+
+	// 4. Send the whole batch in one round-trip, then close it (required!).
+	results := tx.SendBatch(ctx, batch)
+	if err := results.Close(); err != nil {
+		return Quiz{}, fmt.Errorf("insert questions: %w", err)
+	}
+
+	// 5. All-or-nothing: commit everything together.
+	if err := tx.Commit(ctx); err != nil {
+		return Quiz{}, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return created, nil
 }
 
 // ---------------------------------------------------------------------------

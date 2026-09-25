@@ -29,7 +29,7 @@ type config struct {
 
 func loadConfig() config {
 	return config{
-		HTTPAddr:       envString("HTTP_ADDR", ":8080"),
+		HTTPAddr:       envString("HTTP_ADDR", ":8081"),
 		DatabaseURL:    envString("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/arahin_mini?sslmode=disable"),
 		AIStubDelayMS:  envInt("AI_STUB_DELAY_MS", 400),
 		AIStubFailRate: envFloat("AI_STUB_FAIL_RATE", 0.0),
